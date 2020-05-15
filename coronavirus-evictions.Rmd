@@ -1,0 +1,263 @@
+---
+title: "coronavirus-evictions"
+author: "Joe Yerardi"
+date: "5/14/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo = FALSE}
+library("dplyr")
+library("ggplot2")
+library("htmltools")
+library("plyr")
+library("purrr")
+library("readr")
+library("readxl")
+library("sf")
+library("stringr")
+library("tidyr")
+library("leaflet")
+library("tigris")
+```
+
+```{r import, echo = FALSE}
+# Import the data
+
+filedir_first_batch <- setwd("C:/users/joeye/desktop/coronavirus-evictions/data/westlaw_data_first_batch")
+file_names_first_batch <- dir(filedir_first_batch)
+first_batch <- do.call(rbind.fill,lapply(file_names_first_batch, read_csv)) %>% 
+  select(TITLE,
+         DOCKET_NO,
+         COURT_SHORT_NAME,
+         FILING_DATE)
+
+filedir_second_batch <- setwd("C:/users/joeye/desktop/coronavirus-evictions/data/westlaw_data_second_batch")
+file_names_second_batch <- dir(filedir_second_batch)
+second_batch <- do.call(rbind.fill,lapply(file_names_second_batch, read_csv)) %>% 
+  select(TITLE,
+         DOCKET_NO,
+         COURT_SHORT_NAME,
+         FILING_DATE)
+
+filedir_third_batch <- setwd("C:/users/joeye/desktop/coronavirus-evictions/data/westlaw_data_third_batch")
+file_names_third_batch <- dir(filedir_third_batch)
+third_batch <- do.call(rbind.fill,lapply(file_names_third_batch, read_csv)) %>% 
+  select(TITLE,
+         DOCKET_NO,
+         COURT_SHORT_NAME,
+         FILING_DATE)
+```
+
+```{r concatenate the dataframes, echo = FALSE}
+# Concatenate the data
+
+evictions <- rbind(first_batch, second_batch, third_batch)
+```
+
+```{r format the data, echo = FALSE}
+# Do we have duplicate docket numbers in here?
+evictions %>% 
+  group_by(DOCKET_NO) %>% 
+  dplyr::summarize(count = n()) %>% 
+  arrange(desc(count))
+
+# We do. But it also appears that some docket numbers repeat between courts so we'll need to look for duplicates in several columns.
+evictions_duplicates_removed <- evictions %>% 
+  distinct(TITLE, DOCKET_NO, COURT_SHORT_NAME, FILING_DATE)
+
+# Convert the filing date column from text to date time format
+evictions_duplicates_removed$FILING_DATE_FORMATTED <- as.Date(str_remove(evictions_duplicates_removed$FILING_DATE, ","), format = "%B%e%Y")
+```
+
+```{r analyze the data}
+# Analyze the data
+
+# How many courts are in this data?
+View(evictions_duplicates_removed %>% 
+       group_by(COURT_SHORT_NAME) %>% 
+       dplyr::summarize(num_cases = n()))
+
+# Divide the data into 2019 and 2020 and count the number of cases by court
+evictions_by_court_19 <- evictions_duplicates_removed %>% 
+  filter(FILING_DATE_FORMATTED < "2020-01-01") %>% 
+  group_by(COURT_SHORT_NAME) %>% 
+  dplyr::summarize(num_cases_by_court_19 = n())
+evictions_by_court_20 <- evictions_duplicates_removed %>% 
+  filter(FILING_DATE_FORMATTED > "2019-12-31") %>% 
+  group_by(COURT_SHORT_NAME) %>% 
+  dplyr::summarize(num_cases_by_court_20 = n())
+
+# Join the data frames, resulting in a data frame of courts with at least one case in both years
+courts_minimum_one_case <- inner_join(evictions_by_court_20,
+                                      evictions_by_court_19,
+                                      by = "COURT_SHORT_NAME",
+                                      suffix = c("_20", "_19")) %>% 
+  select(court = COURT_SHORT_NAME)
+
+# Filter out courts that did not have a single case in both 2019 and 2020
+evictions_duplicates_removed_minimum_one_case <- evictions_duplicates_removed %>% 
+  filter(COURT_SHORT_NAME %in% courts_minimum_one_case$court)
+
+# How many courts had at least one case in both 2019 and 2020?
+View(evictions_duplicates_removed_minimum_one_case %>% 
+       group_by(COURT_SHORT_NAME) %>% 
+       dplyr::summarize(num_cases = n()))
+
+# How many cases did these courts see?
+evictions_duplicates_removed_minimum_one_case %>% 
+  dplyr::summarize(total_cases = n())
+
+# And how many of these courts saw at least 100 cases?
+View(evictions_duplicates_removed_minimum_one_case %>% 
+       group_by(COURT_SHORT_NAME) %>% 
+       dplyr::summarize(num_cases = n()) %>% 
+       filter(num_cases >= 100))
+
+# How many evictions were filed in these courts by day in each year?
+# 2019
+evictions_by_day_19 <- evictions_duplicates_removed_minimum_one_case %>% 
+  filter(FILING_DATE_FORMATTED < "2020-01-01") %>% 
+  group_by(FILING_DATE_FORMATTED) %>% 
+  dplyr::summarize(count = n()) %>% 
+  arrange(FILING_DATE_FORMATTED)
+# 2020
+evictions_by_day_20 <- evictions_duplicates_removed_minimum_one_case %>% 
+  filter(FILING_DATE_FORMATTED > "2019-12-31") %>% 
+  group_by(FILING_DATE_FORMATTED) %>% 
+  dplyr::summarize(count = n()) %>% 
+  arrange(FILING_DATE_FORMATTED)
+
+# Visualize this data
+# 2019
+plot(evictions_by_day_19$count ~ evictions_by_day_19$FILING_DATE_FORMATTED,
+     main = "Evictions by day, 2019",
+     xlab = "Date",
+     ylab = "Evictions per day",
+     type = "h")
+# 2020
+plot(evictions_by_day_20$count ~ evictions_by_day_20$FILING_DATE_FORMATTED,
+     main = "Evictions by day, 2020",
+     xlab = "Date",
+     ylab = "Evictions per day",
+     type = "h")
+
+# A big drop off in March and April of 2020. Not surprising.
+
+# Divide the data into pre-EO, pre-CARES and post-CARES for each year
+
+# Pre-EO
+evictions_pre_eo_19 <- evictions_duplicates_removed_minimum_one_case %>% 
+  filter(FILING_DATE_FORMATTED >= "2019-01-01" & FILING_DATE_FORMATTED <= "2019-03-17") %>% 
+  group_by(COURT_SHORT_NAME) %>% 
+  dplyr::summarize(num_cases = n()) %>% 
+  select(court = COURT_SHORT_NAME, num_cases)
+evictions_pre_eo_20 <- evictions_duplicates_removed_minimum_one_case %>% 
+  filter(FILING_DATE_FORMATTED >= "2020-01-01" & FILING_DATE_FORMATTED <= "2020-03-17") %>% 
+  group_by(COURT_SHORT_NAME) %>% 
+  dplyr::summarize(num_cases = n()) %>% 
+  select(court = COURT_SHORT_NAME, num_cases)
+
+# Pre-CARES
+evictions_pre_cares_19 <- evictions_duplicates_removed_minimum_one_case %>% 
+  filter(FILING_DATE_FORMATTED >= "2019-03-18" & FILING_DATE_FORMATTED <= "2019-03-26") %>% 
+  group_by(COURT_SHORT_NAME) %>% 
+  dplyr::summarize(num_cases = n()) %>% 
+  select(court = COURT_SHORT_NAME, num_cases)
+evictions_pre_cares_20 <- evictions_duplicates_removed_minimum_one_case %>% 
+  filter(FILING_DATE_FORMATTED >= "2020-03-18" & FILING_DATE_FORMATTED <= "2020-03-26") %>% 
+  group_by(COURT_SHORT_NAME) %>% 
+  dplyr::summarize(num_cases = n()) %>% 
+  select(court = COURT_SHORT_NAME, num_cases)
+
+# Post-CARES
+evictions_post_cares_19 <- evictions_duplicates_removed_minimum_one_case %>% 
+  filter(FILING_DATE_FORMATTED >= "2019-03-27" & FILING_DATE_FORMATTED <= "2019-05-14") %>% 
+  group_by(COURT_SHORT_NAME) %>% 
+  dplyr::summarize(num_cases = n()) %>% 
+  select(court = COURT_SHORT_NAME, num_cases)
+evictions_post_cares_20 <- evictions_duplicates_removed_minimum_one_case %>% 
+  filter(FILING_DATE_FORMATTED >= "2020-03-27" & FILING_DATE_FORMATTED <= "2020-05-14") %>% 
+  group_by(COURT_SHORT_NAME) %>% 
+  dplyr::summarize(num_cases = n()) %>% 
+  select(court = COURT_SHORT_NAME, num_cases)
+
+# Join the data frames
+evictions_pre_eo <- full_join(evictions_pre_eo_20, evictions_pre_eo_19, by = "court", suffix = c("_20", "_19"))
+evictions_pre_cares <- full_join(evictions_pre_cares_20, evictions_pre_cares_19, by = "court", suffix = c("_20", "_19"))
+evictions_post_cares <- full_join(evictions_post_cares_20, evictions_post_cares_19, by = "court", suffix = c("_20", "_19"))
+
+# Convert NA values to zeros
+evictions_pre_eo$num_cases_20[is.na(evictions_pre_eo$num_cases_20)] = 0
+evictions_pre_eo$num_cases_19[is.na(evictions_pre_eo$num_cases_19)] = 0
+evictions_pre_cares$num_cases_20[is.na(evictions_pre_cares$num_cases_20)] = 0
+evictions_pre_cares$num_cases_19[is.na(evictions_pre_cares$num_cases_19)] = 0
+evictions_post_cares$num_cases_20[is.na(evictions_post_cares$num_cases_20)] = 0
+evictions_post_cares$num_cases_19[is.na(evictions_post_cares$num_cases_19)] = 0
+
+# Calculate the change in cases between 2019 and 2020
+evictions_pre_eo <- evictions_pre_eo %>% 
+  mutate(change_num_cases = num_cases_20 - num_cases_19,
+         pct_change_num_cases = round((num_cases_20 - num_cases_19) / num_cases_19 * 100, digits = 2))
+evictions_pre_cares <- evictions_pre_cares %>% 
+  mutate(change_num_cases = num_cases_20 - num_cases_19,
+         pct_change_num_cases = round((num_cases_20 - num_cases_19) / num_cases_19 * 100, digits = 2))
+evictions_post_cares <- evictions_post_cares %>% 
+  mutate(change_num_cases = num_cases_20 - num_cases_19,
+         pct_change_num_cases = round((num_cases_20 - num_cases_19) / num_cases_19 * 100, digits = 2))
+
+# How many evictions were reported in each time frame in 2020 and in 2019?
+# Pre-EO
+evictions_pre_eo %>% 
+  summarize(num_cases_total_20 = sum(num_cases_20),
+            num_cases_total_19 = sum(num_cases_19),
+            change_num_cases_total = sum(num_cases_20) - sum(num_cases_19),
+            pct_change_num_cases_total = (sum(num_cases_20) - sum(num_cases_19)) / sum(num_cases_19))
+# Pre-CARES
+evictions_pre_cares %>% 
+  summarize(num_cases_total_20 = sum(num_cases_20),
+            num_cases_total_19 = sum(num_cases_19),
+            change_num_cases_total = sum(num_cases_20) - sum(num_cases_19),
+            pct_change_num_cases_total = (sum(num_cases_20) - sum(num_cases_19)) / sum(num_cases_19))
+# Post-CARES
+evictions_post_cares %>% 
+  summarize(num_cases_total_20 = sum(num_cases_20),
+            num_cases_total_19 = sum(num_cases_19),
+            change_num_cases_total = sum(num_cases_20) - sum(num_cases_19),
+            pct_change_num_cases_total = (sum(num_cases_20) - sum(num_cases_19)) / sum(num_cases_19))
+
+# How many courts saw increases between the years?
+# Pre-EO
+View(evictions_pre_eo %>% 
+       filter(change_num_cases >= 1 & num_cases_20 >= 100))
+# Pre-CARES
+View(evictions_pre_cares %>% 
+       filter(change_num_cases >= 1 & num_cases_20 >= 100))
+# Post-CARES
+View(evictions_post_cares %>% 
+       filter(change_num_cases >= 1 & num_cases_20 >= 100))
+
+# Which courts saw the most cases this year?
+# Pre-EO
+View(evictions_pre_eo %>% 
+       arrange(desc(num_cases_20)))
+# Pre-CARES
+View(evictions_pre_cares %>% 
+       arrange(desc(num_cases_20)))
+# Post-CARES
+View(evictions_post_cares %>% 
+       arrange(desc(num_cases_20)))
+```
+
+```{r export the data, echo = FALSE}
+setwd("C:/users/joeye/desktop/coronavirus-evictions/")
+write_csv(evictions_duplicates_removed_minimum_one_case, "data/exported/evictions_duplicates_removed_minimum_one_case.csv")
+write_csv(evictions_pre_cares, "data/exported/evictions_pre_cares.csv")
+write_csv(evictions_pre_eo, "data/exported/evictions_pre_eo.csv")
+write_csv(evictions_post_cares, "data/exported/evictions_post_cares.csv")
+```

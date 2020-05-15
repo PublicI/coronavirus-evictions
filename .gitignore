@@ -1,0 +1,4 @@
+*.txt
+*.RData
+*.Rhistory
+data/westlaw*
