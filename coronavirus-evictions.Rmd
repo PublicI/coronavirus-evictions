@@ -9,22 +9,270 @@ editor_options:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+# Set key file for the Google and Census Bureau API keys
+key_file <- "key_file.txt"
 ```
 
 ```{r, echo = FALSE}
+library("conflicted")
 library("dplyr")
-library("ggplot2")
-library("htmltools")
-library("plyr")
+library("rgdal")
+library("ggmap")
 library("purrr")
 library("readr")
-library("readxl")
+library("rgeos")
 library("sf")
+library("spData")
 library("stringr")
 library("tidyr")
-library("leaflet")
+library("tidycensus")
+library("tidyverse")
 library("tigris")
 ```
+
+```{r import Westlaw case data}
+# Set working directory
+setwd("C:/users/joeye/desktop/coronavirus-evictions")
+
+# Import the list of cases
+cases <- read_csv("data/cases.csv") %>% 
+  select(case_title = "Case Title:",
+         court = "Court:",
+         case_number = "Case Number:",
+         key_nature_of_suit = "Key Nature of Suit:",
+         date_filed = "Date Filed:",
+         judge = "Judge:",
+         disposition = "Disposition:",
+         docket_guid = guid)
+
+# Import the list of participants
+participants <- read_csv("data/participants.csv") %>% 
+  select(name = Name,
+         type = "Type:",
+         address = "Address:",
+         docket_guid)
+
+# Filter to just defendants and eliminate companies
+defendants <- participants %>% 
+  dplyr::filter(str_detect(type, regex("defendant|respondent|property|tenant", ignore_case = T)) &
+                  str_detect(type, regex("counter", ignore_case = T), negate = T) &
+                  str_detect(name, regex(" corp| inc| llc", ignore_case = T), negate = T))
+
+# Eliminate duplicate docket_guids so we're left with only one defendant per case
+defendants_one_per_case <- defendants %>% 
+  distinct(docket_guid, .keep_all = T)
+
+# Join the defendants data frame to the cases data frame
+evictions <- defendants_one_per_case %>% 
+  inner_join(cases, by = "docket_guid")
+```
+
+```{r geocode the data}
+# Read-in Google API key
+google_key <- readLines(key_file)[1]
+
+# Register key
+register_google(key = google_key)
+
+# Eliminate evictions with missing addresses
+evictions_with_addresses <- evictions %>% 
+  dplyr::filter(!is.na(address))
+
+# Geocode the evictions
+geocoding_results <- geocode(evictions_with_addresses$address, output = "more", source = "google")
+
+# Rename columns
+geocoding_results <- geocoding_results %>% 
+  dplyr::rename("geocode_type" = "type",
+                "geocode_address" = "address")
+
+# Combine the geocoding results with the evictions
+evictions_geocoded <- cbind(evictions_with_addresses, geocoding_results)
+
+# Export the data
+write_csv(evictions_geocoded, "data/exported/evictions_geocoded.csv")
+```
+
+```{r import Census race and income data}
+# Read-in Census API key
+census_key<- (readLines(key_file)[2])
+
+# Create list of all US states to iterate through in the API calls
+us <- unique(fips_codes$state)[1:51]
+
+# Download median household income data
+median_hh_inc <- map_df(us, function(x) {
+  get_acs(geography = "tract", variables = "B19013_001", 
+          state = x, key = census_key)
+}) %>% 
+  mutate(income_quartile = ntile(estimate, 4)) %>% 
+  select(geoid = GEOID,
+         geography = NAME,
+         median_hh_income = estimate,
+         income_quartile)
+
+# Download race data
+race <- map_df(us, function(x) {
+  get_acs(geography = "tract", variables = c("B03002_001",
+                                             "B03002_003"),
+          state = x, key = census_key)
+}) %>% pivot_wider(id_cols = c(GEOID, NAME),
+              names_from = c(variable),
+              values_from = estimate) %>% 
+  mutate(non_white = B03002_001 - B03002_003,
+         pct_white = round(B03002_003 / B03002_001 * 100, 1),
+         pct_non_white = round(non_white / B03002_001 * 100, 1),
+         above_avg_non_white = case_when(
+           # 38.9% of the US population was non-white as per 2014-2018 ACS
+           pct_non_white > 38.9 ~ T,
+           pct_non_white <= 38.9 ~ F)) %>% 
+  select(geoid = GEOID,
+         geography = NAME,
+         total_pop = B03002_001,
+         white = B03002_003,
+         non_white,
+         pct_white,
+         pct_non_white,
+         above_avg_non_white)
+
+# Join the census data
+census <- race %>% 
+  inner_join(median_hh_inc, by = "geoid") %>% 
+  rename(geography = geography.x) %>% 
+  select(-geography.y)
+```
+
+```{r geospatial analysis}
+# Import the geocoded evictions data
+evictions_geocoded <- read_csv("data/exported/evictions_geocoded.csv")
+
+# Filter out rows with imprecise geocoding results
+evictions_geocoded <- evictions_geocoded %>% 
+  dplyr::filter(loctype == "rooftop" | loctype == "range_interpolated")
+  
+# Convert the data frame to an sf object
+evictions_geocoded_sf <- st_as_sf(evictions_geocoded,
+                                   coords = c("lon", "lat"),
+                                   crs = 4326)
+
+# Set the path to the Census tracts geodatabase
+gdb <- path.expand("C:/Users/joeye/Desktop/coronavirus-evictions/data/ACS_2018_5YR_TRACT.gdb")
+
+# What are the layers contained in the geodatabase?
+ogrListLayers(gdb)
+
+# Extract the tracts layer
+tracts <- readOGR(gdb, "ACS_2018_5YR_TRACT")
+
+# Convert tracts from sp to sf object
+tracts_sf <- st_as_sf(tracts)
+
+# Reproject the tracts CRS to match that of the geocoded evictions
+tracts_sf <- st_transform(tracts_sf, 4326)
+
+# Join the evictions and census tracts layers
+evictions_tracts_joined <- st_join(evictions_geocoded_sf, tracts_sf)
+```
+
+```{r analyze the data}
+# Join the Census data to the evictions data
+evictions_tracts_census <- evictions_tracts_joined %>% 
+  inner_join(census, by = c("GEOID" = "geoid"))
+
+# What proportion of evictions occur in census tract with above average proportions of non-white people?
+evictions_tracts_census %>% 
+  group_by(above_avg_non_white) %>% 
+  summarize(num_evictions = n())
+
+# What proportion of evictions occur in tracts in each income quartile?
+evictions_tracts_census %>% 
+  group_by(income_quartile) %>% 
+  summarize(num_evictions = n())
+
+# What proportion of evictions fall into tracts with both an above average proportion of non-white people and that are in the lowest income quartile?
+evictions_tracts_census %>% 
+  dplyr::filter(above_avg_non_white == T & income_quartile == 1) %>% 
+  summarize(num_evictions = n())
+
+# And how many people live in such tracts?
+census %>% 
+  dplyr::filter(above_avg_non_white == T & income_quartile == 1) %>% 
+  summarize(total_pop = sum(total_pop))
+
+# And how many people live in the United States?
+census %>% 
+  summarize(total_pop = sum(total_pop))
+
+# What proportion of eviction cases were against tenants in majority-minority tracts?
+evictions_tracts_census %>% 
+  dplyr::filter(pct_non_white > 50.0) %>% 
+  summarize(num_cases = n())
+
+# Export the data
+st_write(evictions_tracts_census, "data/exported/evictions_tracts_census.geojson", driver = "GeoJSON")
+```
+
+
+# OLD CODE BELOW; IGNORE FOR NOW
+
+
+```{r work with the dockets}
+
+setwd("C:/users/joeye/desktop/coronavirus-evictions")
+
+#get list of all RTF FILES ONLY in the folder
+files <- list.files("C:/users/joeye/desktop/coronavirus-evictions/data/dockets", pattern = "\\.rtf$")
+
+#loop through files
+for(file in files){
+  #read RTF into R
+  x <- read_rtf(file)
+  #strip RTF encoding
+  y <- strip_rtf(x)
+  #Write each to a TXT file by its original name
+  write(y,paste("C:/users/joeye/desktop/coronavirus-evictions/data/dockets/Output/",file,".txt",sep=""))
+}
+
+
+
+rtf_files_list <- list.files("C:/users/joeye/desktop/coronavirus-evictions/data/dockets", pattern = "\\.rtf$")
+
+# Convert the RTF files to TXT files
+for(file in rtf_files_list){
+  x <- read_rtf(rtf_files_list)
+  y <- strip_rtf(x)
+  write(y, paste0("C:/users/joeye/desktop/coronavirus-evictions/data/dockets/converted/", file, ".txt"))
+}
+
+txt_file_list <- list.files(path=folder, pattern="*.txt")                              
+
+# read in each .txt file in file_list and rbind them into a data frame called data 
+data <- 
+  do.call("rbind", 
+          lapply(file_list, 
+                 function(x) 
+                 read.table(paste(folder, x, sep=''), 
+                            header = TRUE, 
+                            stringsAsFactors = FALSE)))
+
+setwd("C:/Users/joeye/Desktop/coronavirus-evictions/data/dockets")
+
+combined_dockets <- read_rtf("concat_rtf.rtf", stringsAsFactors = F)
+
+alachua_1_dockets <- read_rtf("alachua_1.rtf")
+head(alachua_1_dockets)
+View(alachua_1_dockets)
+
+alachua_1_dockets_df <- as.data.frame(alachua_1_dockets, stringsAsFactors = F)
+
+alachua_1_dockets_df <- alachua_1_dockets_df %>% 
+  select(column_1 = 1)
+
+address_rows <- alachua_1_dockets_df %>% 
+  filter(str_detect(column_1, fixed("*| Type:")) | str_detect(column_1, fixed("*| Address:")))
+```
+
 
 ```{r import, echo = FALSE}
 # Import the data
