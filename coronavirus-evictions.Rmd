@@ -10,6 +10,9 @@ editor_options:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
+# Set working directory
+setwd("C:/users/joeye/desktop/coronavirus-evictions")
+
 # Set key file for the Google and Census Bureau API keys
 key_file <- "key_file.txt"
 ```
@@ -17,8 +20,11 @@ key_file <- "key_file.txt"
 ```{r, echo = FALSE}
 library("conflicted")
 library("dplyr")
+library("htmltools")
+library("leaflet")
 library("rgdal")
 library("ggmap")
+library("mapdeck")
 library("purrr")
 library("readr")
 library("rgeos")
@@ -32,9 +38,6 @@ library("tigris")
 ```
 
 ```{r import Westlaw case data}
-# Set working directory
-setwd("C:/users/joeye/desktop/coronavirus-evictions")
-
 # Import the list of cases
 cases <- read_csv("data/cases.csv") %>% 
   select(case_title = "Case Title:",
@@ -48,23 +51,23 @@ cases <- read_csv("data/cases.csv") %>%
 
 # Import the list of participants
 participants <- read_csv("data/participants.csv") %>% 
-  select(name = Name,
+  select(participant = Name,
          type = "Type:",
          address = "Address:",
          docket_guid)
 
-# Filter to just defendants and eliminate companies
-defendants <- participants %>% 
+# Filter to just respondents and eliminate companies
+respondents <- participants %>% 
   dplyr::filter(str_detect(type, regex("defendant|respondent|property|tenant", ignore_case = T)) &
                   str_detect(type, regex("counter", ignore_case = T), negate = T) &
-                  str_detect(name, regex(" corp| inc| llc", ignore_case = T), negate = T))
+                  str_detect(participant, regex(" corp| inc| llc", ignore_case = T), negate = T))
 
-# Eliminate duplicate docket_guids so we're left with only one defendant per case
-defendants_one_per_case <- defendants %>% 
+# Eliminate duplicate docket_guids so we're left with only one respondent per case
+respondents_one_per_case <- respondents %>% 
   distinct(docket_guid, .keep_all = T)
 
-# Join the defendants data frame to the cases data frame
-evictions <- defendants_one_per_case %>% 
+# Join the respondents data frame to the cases data frame
+evictions <- respondents_one_per_case %>% 
   inner_join(cases, by = "docket_guid")
 ```
 
@@ -153,8 +156,9 @@ evictions_geocoded <- evictions_geocoded %>%
   
 # Convert the data frame to an sf object
 evictions_geocoded_sf <- st_as_sf(evictions_geocoded,
-                                   coords = c("lon", "lat"),
-                                   crs = 4326)
+                                  crs = 4326,
+                                  coords = c("lon", "lat"),
+                                  remove = F)
 
 # Set the path to the Census tracts geodatabase
 gdb <- path.expand("C:/Users/joeye/Desktop/coronavirus-evictions/data/ACS_2018_5YR_TRACT.gdb")
@@ -169,16 +173,36 @@ tracts <- readOGR(gdb, "ACS_2018_5YR_TRACT")
 tracts_sf <- st_as_sf(tracts)
 
 # Reproject the tracts CRS to match that of the geocoded evictions
-tracts_sf <- st_transform(tracts_sf, 4326)
+tracts_sf <- st_transform(tracts_sf,
+                          crs = 4326)
 
-# Join the evictions and census tracts layers
+# Join the evictions and census tracts layers, with each record being an eviction
 evictions_tracts_joined <- st_join(evictions_geocoded_sf, tracts_sf)
+
+# Join the evictions and census tracts layers, with each record being a tract
+tracts_evictions_joined <- st_join(tracts_sf, evictions_geocoded_sf, left = F) %>% 
+  group_by(GEOID) %>% 
+  summarize(number_of_evictions = n())
+
+# Export the data
+st_write(evictions_tracts_joined, "data/exported/evictions_tracts_joined.geojson", driver = "GeoJSON")
+st_write(tracts_evictions_joined, "data/exported/tracts_evictions_joined.geojson", driver = "GeoJSON")
 ```
 
 ```{r analyze the data}
+# Import the data
+evictions_tracts_joined <- read_sf("data/exported/evictions_tracts_joined.geojson")
+tracts_evictions_joined <- read_sf("data/exported/tracts_evictions_joined.geojson")
+
 # Join the Census data to the evictions data
 evictions_tracts_census <- evictions_tracts_joined %>% 
-  inner_join(census, by = c("GEOID" = "geoid"))
+  inner_join(census, by = c("GEOID" = "geoid")) %>% 
+  select(1:16, 37:45, 36)
+
+# Join the Census data to the tracts data
+tracts_evictions_census <- tracts_evictions_joined %>% 
+  inner_join(census, by = c("GEOID" = "geoid")) %>% 
+  select(1:2, 4:12, 3)
 
 # What proportion of evictions occur in census tract with above average proportions of non-white people?
 evictions_tracts_census %>% 
@@ -209,8 +233,65 @@ evictions_tracts_census %>%
   dplyr::filter(pct_non_white > 50.0) %>% 
   summarize(num_cases = n())
 
+# And how many people live in such tracts?
+census %>% 
+  dplyr::filter(pct_non_white > 50.0) %>% 
+  summarize(total_pop = sum(total_pop))
+
 # Export the data
+write_csv(evictions_tracts_census, "data/exported/evictions_tracts_census.csv")
+write_csv(tracts_evictions_census, "data/exported/tracts_evictions_census.csv")
 st_write(evictions_tracts_census, "data/exported/evictions_tracts_census.geojson", driver = "GeoJSON")
+st_write(tracts_evictions_census, "data/exported/tracts_evictions_census.geojson", driver = "GeoJSON")
+```
+
+```{r map the data}
+# Import the data
+evictions_tracts_census <- read_sf("data/exported/evictions_tracts_census.geojson")
+tracts_evictions_census <- read_sf("data/exported/tracts_evictions_census.geojson")
+
+# Map the evictions
+evictions_map <- evictions_tracts_census %>% 
+  leaflet() %>% 
+  addTiles() %>% 
+  addCircles(lng = ~ lon, lat = ~ lat,
+             weight = 5, radius = 30,
+             popup = ~ paste(paste0("Participant: ", participant),
+                             paste0("Court: ", court),
+                             paste0("Percent Non-White: ", pct_non_white),
+                             paste0("Above Average Non-White: ", above_avg_non_white),
+                             paste0("Median Income: ", median_hh_income),
+                             paste0("Income Quartile: ", income_quartile),
+                             sep = "<br>"),
+             label = ~ address)
+
+evictions_map
+
+# Map the tracts
+pal <- colorNumeric("YlOrRd", domain = tracts_evictions_census$number_of_evictions)
+
+tracts_map <- tracts_evictions_census %>% 
+  leaflet() %>% 
+  addTiles() %>% 
+  addPolygons(fillColor = ~pal(tracts_evictions_census$number_of_evictions),
+              fillOpacity = 1, 
+              weight = 0.9, 
+              smoothFactor = 0.2, 
+              stroke=TRUE,
+              color="white",
+              popup = ~ paste(paste0("Number of Evictions: ", number_of_evictions),
+                              paste0("Percent Non-White: ", pct_non_white),
+                              paste0("Above Average Non-White: ", above_avg_non_white),
+                              paste0("Median Income: ", median_hh_income),
+                              paste0("Income Quartile: ", income_quartile),
+                              sep = "<br>"),
+              label = ~ geography) %>% 
+  addLegend(pal = pal,
+            values = tracts_evictions_census$number_of_evictions,
+            position = "bottomright",
+            title = "Number of Evictions")
+
+tracts_map
 ```
 
 
@@ -272,7 +353,6 @@ alachua_1_dockets_df <- alachua_1_dockets_df %>%
 address_rows <- alachua_1_dockets_df %>% 
   filter(str_detect(column_1, fixed("*| Type:")) | str_detect(column_1, fixed("*| Address:")))
 ```
-
 
 ```{r import, echo = FALSE}
 # Import the data
