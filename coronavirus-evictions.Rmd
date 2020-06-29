@@ -18,7 +18,6 @@ key_file <- "key_file.txt"
 ```
 
 ```{r, echo = FALSE}
-library("conflicted")
 library("dplyr")
 library("htmltools")
 library("leaflet")
@@ -209,12 +208,31 @@ evictions_tracts_census %>%
   group_by(above_avg_non_white) %>% 
   summarize(num_evictions = n())
 
+# What proportion of eviction cases were against tenants in majority-minority tracts?
+evictions_tracts_census %>% 
+  dplyr::filter(pct_non_white > 50.0) %>% 
+  summarize(num_cases = n())
+
+# And how many people live in such tracts?
+census %>% 
+  dplyr::filter(pct_non_white > 50.0) %>% 
+  summarize(total_pop = sum(total_pop))
+
+# And how many people live in the United States?
+census %>% 
+  summarize(total_pop = sum(total_pop))
+
 # What proportion of evictions occur in tracts in each income quartile?
 evictions_tracts_census %>% 
   group_by(income_quartile) %>% 
   summarize(num_evictions = n())
 
-# What proportion of evictions fall into tracts with both an above average proportion of non-white people and that are in the lowest income quartile?
+# What proportion of evictions occur in tracts with either an above average proportion of nonwhite people or that are in the lowest income quartile?
+evictions_tracts_census %>% 
+  dplyr::filter(above_avg_non_white == T | income_quartile == 1) %>% 
+  summarize(num_evictions = n())
+
+# What proportion of evictions occur in tracts with both an above average proportion of non-white people and that are in the lowest income quartile?
 evictions_tracts_census %>% 
   dplyr::filter(above_avg_non_white == T & income_quartile == 1) %>% 
   summarize(num_evictions = n())
@@ -228,15 +246,61 @@ census %>%
 census %>% 
   summarize(total_pop = sum(total_pop))
 
-# What proportion of eviction cases were against tenants in majority-minority tracts?
-evictions_tracts_census %>% 
-  dplyr::filter(pct_non_white > 50.0) %>% 
-  summarize(num_cases = n())
+# Which courts saw the highest number of evictions?
+View(evictions_tracts_census %>% 
+       group_by(court) %>% 
+       summarize(num_evictions = n()) %>% 
+       arrange(desc(num_evictions)))
 
-# And how many people live in such tracts?
-census %>% 
-  dplyr::filter(pct_non_white > 50.0) %>% 
-  summarize(total_pop = sum(total_pop))
+# Which states saw the highest number of evictions?
+View(evictions_tracts_census %>% 
+       mutate(state = str_extract(geography, "\\b[^,]+$")) %>% 
+       group_by(state) %>% 
+       summarize(num_evictions = n()) %>% 
+       arrange(desc(num_evictions)))
+
+# Which tracts saw the highest number of evictions?
+View(tracts_evictions_census %>% 
+       arrange(desc(number_of_evictions)))
+
+# How many eviction cases did Tzadik Management file in Florida?
+View(participants %>% 
+       distinct(docket_guid, .keep_all = T) %>% 
+       dplyr::filter(str_detect(participant, regex("tzadik", ignore_case = T)) &
+                       str_detect(type, regex("plaintiff", ignore_case = T)) &
+                       str_detect(address, regex(", fl", ignore_case = T))))
+
+# Is this the most of any landlord in Florida?
+View(participants %>% 
+       distinct(docket_guid, .keep_all = T) %>% 
+       dplyr::filter(str_detect(type, regex("plaintiff", ignore_case = T)) &
+                       str_detect(address, regex(", fl", ignore_case = T))) %>% 
+       group_by(participant) %>% 
+       summarize(num_evictions = n()) %>% 
+       arrange(desc(num_evictions)))
+
+# Who are the tenants that Tzadik is evicting?
+tzadik_guids <- participants %>% 
+       distinct(docket_guid, .keep_all = T) %>% 
+       dplyr::filter(str_detect(participant, regex("tzadik", ignore_case = T)) &
+                       str_detect(type, regex("plaintiff", ignore_case = T)) &
+                       str_detect(address, regex(" fl", ignore_case = T))) %>% 
+  select(docket_guid)
+
+tzadik_evictions <- evictions_tracts_census %>% 
+  inner_join(tzadik_guids, by = "docket_guid")
+
+# What proportion of these Tzadik evictions occur in tracts with both an above average proportion of non-white people and that are in the lowest income quartile?
+tzadik_evictions %>% 
+  dplyr::filter(above_avg_non_white == T & income_quartile == 1) %>% 
+  summarize(num_evictions = n())
+
+# How many eviction cases did Embarcadero Club file in Georgia?
+View(participants %>% 
+       distinct(docket_guid, .keep_all = T) %>% 
+       dplyr::filter(str_detect(participant, regex("embarcadero club", ignore_case = T)) &
+                       str_detect(type, regex("plaintiff", ignore_case = T)) &
+                       str_detect(address, regex(" ga", ignore_case = T))))
 
 # Export the data
 write_csv(evictions_tracts_census, "data/exported/evictions_tracts_census.csv")
@@ -292,300 +356,4 @@ tracts_map <- tracts_evictions_census %>%
             title = "Number of Evictions")
 
 tracts_map
-```
-
-
-# OLD CODE BELOW; IGNORE FOR NOW
-
-
-```{r work with the dockets}
-
-setwd("C:/users/joeye/desktop/coronavirus-evictions")
-
-#get list of all RTF FILES ONLY in the folder
-files <- list.files("C:/users/joeye/desktop/coronavirus-evictions/data/dockets", pattern = "\\.rtf$")
-
-#loop through files
-for(file in files){
-  #read RTF into R
-  x <- read_rtf(file)
-  #strip RTF encoding
-  y <- strip_rtf(x)
-  #Write each to a TXT file by its original name
-  write(y,paste("C:/users/joeye/desktop/coronavirus-evictions/data/dockets/Output/",file,".txt",sep=""))
-}
-
-
-
-rtf_files_list <- list.files("C:/users/joeye/desktop/coronavirus-evictions/data/dockets", pattern = "\\.rtf$")
-
-# Convert the RTF files to TXT files
-for(file in rtf_files_list){
-  x <- read_rtf(rtf_files_list)
-  y <- strip_rtf(x)
-  write(y, paste0("C:/users/joeye/desktop/coronavirus-evictions/data/dockets/converted/", file, ".txt"))
-}
-
-txt_file_list <- list.files(path=folder, pattern="*.txt")                              
-
-# read in each .txt file in file_list and rbind them into a data frame called data 
-data <- 
-  do.call("rbind", 
-          lapply(file_list, 
-                 function(x) 
-                 read.table(paste(folder, x, sep=''), 
-                            header = TRUE, 
-                            stringsAsFactors = FALSE)))
-
-setwd("C:/Users/joeye/Desktop/coronavirus-evictions/data/dockets")
-
-combined_dockets <- read_rtf("concat_rtf.rtf", stringsAsFactors = F)
-
-alachua_1_dockets <- read_rtf("alachua_1.rtf")
-head(alachua_1_dockets)
-View(alachua_1_dockets)
-
-alachua_1_dockets_df <- as.data.frame(alachua_1_dockets, stringsAsFactors = F)
-
-alachua_1_dockets_df <- alachua_1_dockets_df %>% 
-  select(column_1 = 1)
-
-address_rows <- alachua_1_dockets_df %>% 
-  filter(str_detect(column_1, fixed("*| Type:")) | str_detect(column_1, fixed("*| Address:")))
-```
-
-```{r import, echo = FALSE}
-# Import the data
-
-filedir_first_batch <- setwd("C:/users/joeye/desktop/coronavirus-evictions/data/westlaw_data_first_batch")
-file_names_first_batch <- dir(filedir_first_batch)
-first_batch <- do.call(rbind.fill,lapply(file_names_first_batch, read_csv)) %>% 
-  select(TITLE,
-         DOCKET_NO,
-         COURT_SHORT_NAME,
-         FILING_DATE)
-
-filedir_second_batch <- setwd("C:/users/joeye/desktop/coronavirus-evictions/data/westlaw_data_second_batch")
-file_names_second_batch <- dir(filedir_second_batch)
-second_batch <- do.call(rbind.fill,lapply(file_names_second_batch, read_csv)) %>% 
-  select(TITLE,
-         DOCKET_NO,
-         COURT_SHORT_NAME,
-         FILING_DATE)
-
-filedir_third_batch <- setwd("C:/users/joeye/desktop/coronavirus-evictions/data/westlaw_data_third_batch")
-file_names_third_batch <- dir(filedir_third_batch)
-third_batch <- do.call(rbind.fill,lapply(file_names_third_batch, read_csv)) %>% 
-  select(TITLE,
-         DOCKET_NO,
-         COURT_SHORT_NAME,
-         FILING_DATE)
-```
-
-```{r concatenate the dataframes, echo = FALSE}
-# Concatenate the data
-
-evictions <- rbind(first_batch, second_batch, third_batch)
-```
-
-```{r format the data, echo = FALSE}
-# Do we have duplicate docket numbers in here?
-evictions %>% 
-  group_by(DOCKET_NO) %>% 
-  dplyr::summarize(count = n()) %>% 
-  arrange(desc(count))
-
-# We do. But it also appears that some docket numbers repeat between courts so we'll need to look for duplicates in several columns.
-evictions_duplicates_removed <- evictions %>% 
-  distinct(TITLE, DOCKET_NO, COURT_SHORT_NAME, FILING_DATE)
-
-# Convert the filing date column from text to date time format
-evictions_duplicates_removed$FILING_DATE_FORMATTED <- as.Date(str_remove(evictions_duplicates_removed$FILING_DATE, ","), format = "%B%e%Y")
-```
-
-```{r analyze the data}
-# Analyze the data
-
-# How many courts are in this data?
-View(evictions_duplicates_removed %>% 
-       group_by(COURT_SHORT_NAME) %>% 
-       dplyr::summarize(num_cases = n()))
-
-# Divide the data into 2019 and 2020 and count the number of cases by court
-evictions_by_court_19 <- evictions_duplicates_removed %>% 
-  filter(FILING_DATE_FORMATTED < "2020-01-01") %>% 
-  group_by(COURT_SHORT_NAME) %>% 
-  dplyr::summarize(num_cases_by_court_19 = n())
-evictions_by_court_20 <- evictions_duplicates_removed %>% 
-  filter(FILING_DATE_FORMATTED > "2019-12-31") %>% 
-  group_by(COURT_SHORT_NAME) %>% 
-  dplyr::summarize(num_cases_by_court_20 = n())
-
-# Join the data frames, resulting in a data frame of courts with at least one case in both years
-courts_minimum_one_case <- inner_join(evictions_by_court_20,
-                                      evictions_by_court_19,
-                                      by = "COURT_SHORT_NAME",
-                                      suffix = c("_20", "_19")) %>% 
-  select(court = COURT_SHORT_NAME)
-
-# Filter out courts that did not have a single case in both 2019 and 2020
-evictions_duplicates_removed_minimum_one_case <- evictions_duplicates_removed %>% 
-  filter(COURT_SHORT_NAME %in% courts_minimum_one_case$court)
-
-# How many courts had at least one case in both 2019 and 2020?
-View(evictions_duplicates_removed_minimum_one_case %>% 
-       group_by(COURT_SHORT_NAME) %>% 
-       dplyr::summarize(num_cases = n()))
-
-# How many cases did these courts see?
-evictions_duplicates_removed_minimum_one_case %>% 
-  dplyr::summarize(total_cases = n())
-
-# And how many of these courts saw at least 100 cases?
-View(evictions_duplicates_removed_minimum_one_case %>% 
-       group_by(COURT_SHORT_NAME) %>% 
-       dplyr::summarize(num_cases = n()) %>% 
-       filter(num_cases >= 100))
-
-# How many evictions were filed in these courts by day in each year?
-# 2019
-evictions_by_day_19 <- evictions_duplicates_removed_minimum_one_case %>% 
-  filter(FILING_DATE_FORMATTED < "2020-01-01") %>% 
-  group_by(FILING_DATE_FORMATTED) %>% 
-  dplyr::summarize(count = n()) %>% 
-  arrange(FILING_DATE_FORMATTED)
-# 2020
-evictions_by_day_20 <- evictions_duplicates_removed_minimum_one_case %>% 
-  filter(FILING_DATE_FORMATTED > "2019-12-31") %>% 
-  group_by(FILING_DATE_FORMATTED) %>% 
-  dplyr::summarize(count = n()) %>% 
-  arrange(FILING_DATE_FORMATTED)
-
-# Visualize this data
-# 2019
-plot(evictions_by_day_19$count ~ evictions_by_day_19$FILING_DATE_FORMATTED,
-     main = "Evictions by day, 2019",
-     xlab = "Date",
-     ylab = "Evictions per day",
-     type = "h")
-# 2020
-plot(evictions_by_day_20$count ~ evictions_by_day_20$FILING_DATE_FORMATTED,
-     main = "Evictions by day, 2020",
-     xlab = "Date",
-     ylab = "Evictions per day",
-     type = "h")
-
-# A big drop off in March and April of 2020. Not surprising.
-
-# Divide the data into pre-EO, pre-CARES and post-CARES for each year
-
-# Pre-EO
-evictions_pre_eo_19 <- evictions_duplicates_removed_minimum_one_case %>% 
-  filter(FILING_DATE_FORMATTED >= "2019-01-01" & FILING_DATE_FORMATTED <= "2019-03-17") %>% 
-  group_by(COURT_SHORT_NAME) %>% 
-  dplyr::summarize(num_cases = n()) %>% 
-  select(court = COURT_SHORT_NAME, num_cases)
-evictions_pre_eo_20 <- evictions_duplicates_removed_minimum_one_case %>% 
-  filter(FILING_DATE_FORMATTED >= "2020-01-01" & FILING_DATE_FORMATTED <= "2020-03-17") %>% 
-  group_by(COURT_SHORT_NAME) %>% 
-  dplyr::summarize(num_cases = n()) %>% 
-  select(court = COURT_SHORT_NAME, num_cases)
-
-# Pre-CARES
-evictions_pre_cares_19 <- evictions_duplicates_removed_minimum_one_case %>% 
-  filter(FILING_DATE_FORMATTED >= "2019-03-18" & FILING_DATE_FORMATTED <= "2019-03-26") %>% 
-  group_by(COURT_SHORT_NAME) %>% 
-  dplyr::summarize(num_cases = n()) %>% 
-  select(court = COURT_SHORT_NAME, num_cases)
-evictions_pre_cares_20 <- evictions_duplicates_removed_minimum_one_case %>% 
-  filter(FILING_DATE_FORMATTED >= "2020-03-18" & FILING_DATE_FORMATTED <= "2020-03-26") %>% 
-  group_by(COURT_SHORT_NAME) %>% 
-  dplyr::summarize(num_cases = n()) %>% 
-  select(court = COURT_SHORT_NAME, num_cases)
-
-# Post-CARES
-evictions_post_cares_19 <- evictions_duplicates_removed_minimum_one_case %>% 
-  filter(FILING_DATE_FORMATTED >= "2019-03-27" & FILING_DATE_FORMATTED <= "2019-05-14") %>% 
-  group_by(COURT_SHORT_NAME) %>% 
-  dplyr::summarize(num_cases = n()) %>% 
-  select(court = COURT_SHORT_NAME, num_cases)
-evictions_post_cares_20 <- evictions_duplicates_removed_minimum_one_case %>% 
-  filter(FILING_DATE_FORMATTED >= "2020-03-27" & FILING_DATE_FORMATTED <= "2020-05-14") %>% 
-  group_by(COURT_SHORT_NAME) %>% 
-  dplyr::summarize(num_cases = n()) %>% 
-  select(court = COURT_SHORT_NAME, num_cases)
-
-# Join the data frames
-evictions_pre_eo <- full_join(evictions_pre_eo_20, evictions_pre_eo_19, by = "court", suffix = c("_20", "_19"))
-evictions_pre_cares <- full_join(evictions_pre_cares_20, evictions_pre_cares_19, by = "court", suffix = c("_20", "_19"))
-evictions_post_cares <- full_join(evictions_post_cares_20, evictions_post_cares_19, by = "court", suffix = c("_20", "_19"))
-
-# Convert NA values to zeros
-evictions_pre_eo$num_cases_20[is.na(evictions_pre_eo$num_cases_20)] = 0
-evictions_pre_eo$num_cases_19[is.na(evictions_pre_eo$num_cases_19)] = 0
-evictions_pre_cares$num_cases_20[is.na(evictions_pre_cares$num_cases_20)] = 0
-evictions_pre_cares$num_cases_19[is.na(evictions_pre_cares$num_cases_19)] = 0
-evictions_post_cares$num_cases_20[is.na(evictions_post_cares$num_cases_20)] = 0
-evictions_post_cares$num_cases_19[is.na(evictions_post_cares$num_cases_19)] = 0
-
-# Calculate the change in cases between 2019 and 2020
-evictions_pre_eo <- evictions_pre_eo %>% 
-  mutate(change_num_cases = num_cases_20 - num_cases_19,
-         pct_change_num_cases = round((num_cases_20 - num_cases_19) / num_cases_19 * 100, digits = 2))
-evictions_pre_cares <- evictions_pre_cares %>% 
-  mutate(change_num_cases = num_cases_20 - num_cases_19,
-         pct_change_num_cases = round((num_cases_20 - num_cases_19) / num_cases_19 * 100, digits = 2))
-evictions_post_cares <- evictions_post_cares %>% 
-  mutate(change_num_cases = num_cases_20 - num_cases_19,
-         pct_change_num_cases = round((num_cases_20 - num_cases_19) / num_cases_19 * 100, digits = 2))
-
-# How many evictions were reported in each time frame in 2020 and in 2019?
-# Pre-EO
-evictions_pre_eo %>% 
-  summarize(num_cases_total_20 = sum(num_cases_20),
-            num_cases_total_19 = sum(num_cases_19),
-            change_num_cases_total = sum(num_cases_20) - sum(num_cases_19),
-            pct_change_num_cases_total = (sum(num_cases_20) - sum(num_cases_19)) / sum(num_cases_19))
-# Pre-CARES
-evictions_pre_cares %>% 
-  summarize(num_cases_total_20 = sum(num_cases_20),
-            num_cases_total_19 = sum(num_cases_19),
-            change_num_cases_total = sum(num_cases_20) - sum(num_cases_19),
-            pct_change_num_cases_total = (sum(num_cases_20) - sum(num_cases_19)) / sum(num_cases_19))
-# Post-CARES
-evictions_post_cares %>% 
-  summarize(num_cases_total_20 = sum(num_cases_20),
-            num_cases_total_19 = sum(num_cases_19),
-            change_num_cases_total = sum(num_cases_20) - sum(num_cases_19),
-            pct_change_num_cases_total = (sum(num_cases_20) - sum(num_cases_19)) / sum(num_cases_19))
-
-# How many courts saw increases between the years?
-# Pre-EO
-View(evictions_pre_eo %>% 
-       filter(change_num_cases >= 1 & num_cases_20 >= 100))
-# Pre-CARES
-View(evictions_pre_cares %>% 
-       filter(change_num_cases >= 1 & num_cases_20 >= 100))
-# Post-CARES
-View(evictions_post_cares %>% 
-       filter(change_num_cases >= 1 & num_cases_20 >= 100))
-
-# Which courts saw the most cases this year?
-# Pre-EO
-View(evictions_pre_eo %>% 
-       arrange(desc(num_cases_20)))
-# Pre-CARES
-View(evictions_pre_cares %>% 
-       arrange(desc(num_cases_20)))
-# Post-CARES
-View(evictions_post_cares %>% 
-       arrange(desc(num_cases_20)))
-```
-
-```{r export the data, echo = FALSE}
-setwd("C:/users/joeye/desktop/coronavirus-evictions/")
-write_csv(evictions_duplicates_removed_minimum_one_case, "data/exported/evictions_duplicates_removed_minimum_one_case.csv")
-write_csv(evictions_pre_cares, "data/exported/evictions_pre_cares.csv")
-write_csv(evictions_pre_eo, "data/exported/evictions_pre_eo.csv")
-write_csv(evictions_post_cares, "data/exported/evictions_post_cares.csv")
 ```
