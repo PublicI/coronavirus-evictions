@@ -265,30 +265,26 @@ View(tracts_evictions_census %>%
 
 # How many eviction cases did Tzadik Management file in Florida?
 View(participants %>% 
-       distinct(docket_guid, .keep_all = T) %>% 
        dplyr::filter(str_detect(participant, regex("tzadik", ignore_case = T)) &
                        str_detect(type, regex("plaintiff", ignore_case = T)) &
                        str_detect(address, regex(", fl", ignore_case = T))))
 
 # Is this the most of any landlord in Florida?
 View(participants %>% 
-       distinct(docket_guid, .keep_all = T) %>% 
        dplyr::filter(str_detect(type, regex("plaintiff", ignore_case = T)) &
                        str_detect(address, regex(", fl", ignore_case = T))) %>% 
+       distinct(docket_guid, .keep_all = T) %>% 
        group_by(participant) %>% 
        summarize(num_evictions = n()) %>% 
        arrange(desc(num_evictions)))
 
 # Who are the tenants that Tzadik is evicting?
 tzadik_guids <- participants %>% 
-       distinct(docket_guid, .keep_all = T) %>% 
        dplyr::filter(str_detect(participant, regex("tzadik", ignore_case = T)) &
                        str_detect(type, regex("plaintiff", ignore_case = T)) &
                        str_detect(address, regex(" fl", ignore_case = T))) %>% 
+  distinct(docket_guid, .keep_all = T) %>% 
   select(docket_guid)
-
-tzadik_evictions <- evictions_tracts_census %>% 
-  inner_join(tzadik_guids, by = "docket_guid")
 
 # What proportion of these Tzadik evictions occur in tracts with both an above average proportion of non-white people and that are in the lowest income quartile?
 tzadik_evictions %>% 
@@ -297,10 +293,10 @@ tzadik_evictions %>%
 
 # How many eviction cases did Embarcadero Club file in Georgia?
 View(participants %>% 
-       distinct(docket_guid, .keep_all = T) %>% 
        dplyr::filter(str_detect(participant, regex("embarcadero club", ignore_case = T)) &
                        str_detect(type, regex("plaintiff", ignore_case = T)) &
-                       str_detect(address, regex(" ga", ignore_case = T))))
+                       str_detect(address, regex(" ga", ignore_case = T)))) %>% 
+  distinct(docket_guid, .keep_all = T)
 
 # Export the data
 write_csv(evictions_tracts_census, "data/exported/evictions_tracts_census.csv")
