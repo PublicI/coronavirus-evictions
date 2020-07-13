@@ -42,6 +42,7 @@ cases <- read_csv("data/cases.csv") %>%
   select(case_title = "Case Title:",
          court = "Court:",
          case_number = "Case Number:",
+         case_subtype = "Case Subtype:",
          key_nature_of_suit = "Key Nature of Suit:",
          date_filed = "Date Filed:",
          judge = "Judge:",
@@ -55,19 +56,31 @@ participants <- read_csv("data/participants.csv") %>%
          address = "Address:",
          docket_guid)
 
+# Filter to remove commercial eviction cases and cases where it's unclear whether an eviction is being sought
+eviction_cases <- cases %>% 
+  filter(key_nature_of_suit != "Landlord/Tenant (270)" &
+           key_nature_of_suit != "LANDLORD/TENANT (270)" &
+           key_nature_of_suit != "Landlord/Tenant; Unlawful Detainer ; Commercial (270.20.05)" &
+           key_nature_of_suit != "SMALL CLAIMS (410)")
+
+# What sorts of cases remain?
+eviction_cases %>% 
+  group_by(key_nature_of_suit) %>% 
+  summarize(count = n())
+
 # Filter to just respondents and eliminate companies
 respondents <- participants %>% 
   dplyr::filter(str_detect(type, regex("defendant|respondent|property|tenant", ignore_case = T)) &
                   str_detect(type, regex("counter", ignore_case = T), negate = T) &
-                  str_detect(participant, regex(" corp| inc| llc", ignore_case = T), negate = T))
+                  str_detect(participant, regex(" corp| inc| llc| ltd", ignore_case = T), negate = T))
 
 # Eliminate duplicate docket_guids so we're left with only one respondent per case
 respondents_one_per_case <- respondents %>% 
   distinct(docket_guid, .keep_all = T)
 
-# Join the respondents data frame to the cases data frame
+# Join the respondents data frame to the eviction_cases data frame
 evictions <- respondents_one_per_case %>% 
-  inner_join(cases, by = "docket_guid")
+  inner_join(eviction_cases, by = "docket_guid")
 ```
 
 ```{r geocode the data}
@@ -196,7 +209,7 @@ tracts_evictions_joined <- read_sf("data/exported/tracts_evictions_joined.geojso
 # Join the Census data to the evictions data
 evictions_tracts_census <- evictions_tracts_joined %>% 
   inner_join(census, by = c("GEOID" = "geoid")) %>% 
-  select(1:16, 37:45, 36)
+  select(1:17, 38:46, 37)
 
 # Join the Census data to the tracts data
 tracts_evictions_census <- tracts_evictions_joined %>% 
@@ -285,6 +298,9 @@ tzadik_guids <- participants %>%
                        str_detect(address, regex(" fl", ignore_case = T))) %>% 
   distinct(docket_guid, .keep_all = T) %>% 
   select(docket_guid)
+
+tzadik_evictions <- evictions_tracts_census %>% 
+  inner_join(tzadik_guids)
 
 # What proportion of these Tzadik evictions occur in tracts with both an above average proportion of non-white people and that are in the lowest income quartile?
 tzadik_evictions %>% 
