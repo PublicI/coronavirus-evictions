@@ -1,4 +1,8 @@
 *.txt
 *.RData
 *.Rhistory
-data/westlaw*
+data/*
+.Rproj.user
+.Rprofile
+*.Rproj
+key_file.txt
