@@ -1,4 +1,4 @@
-# Communities of Color Poised to Lose Their Homes as Eviction Moratoriums Life
+# Communities of color poised to lose their homes as eviction moratoriums lift
 
 This repo contains code for the analysis in [Communities of Color Poised to Lose Their Homes as Eviction Moratoriums Life](https://publicintegrity.org/health/coronavirus-and-inequality/communities-of-color-homes-coronavirus-evictions-moratoriums-lift/), a Center for Public Integrity story about the disproportionate impact of evictions on poor communities and communities of color in the midst of the coronavirus pandemic.
 
